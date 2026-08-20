@@ -53,21 +53,18 @@
       content: "";
       position: absolute;
       inset: 0;
-      background:
-        linear-gradient(90deg, transparent 0 8%, rgba(8, 127, 122, 0.16) 8% 8.35%, transparent 8.35% 100%),
-        linear-gradient(90deg, transparent 0 38%, rgba(183, 121, 31, 0.16) 38% 38.25%, transparent 38.25% 100%),
-        linear-gradient(90deg, transparent 0 71%, rgba(37, 99, 235, 0.14) 71% 71.2%, transparent 71.2% 100%);
+      background: linear-gradient(90deg, transparent 0 8%, rgba(8, 127, 122, 0.12) 8% 8.2%, transparent 8.2% 100%);
       pointer-events: none;
     }
 
     .hero {
       position: relative;
-      min-height: 390px;
+      min-height: 0;
       display: grid;
       grid-template-columns: minmax(0, 1.05fr) minmax(390px, 0.95fr);
-      gap: 44px;
+      gap: 32px;
       align-items: center;
-      padding: 44px 0 34px;
+      padding: 34px 0 28px;
     }
 
     .eyebrow {
@@ -90,11 +87,11 @@
 
     h1 {
       margin: 0;
-      font-family: Georgia, Charter, "Times New Roman", serif;
-      font-size: clamp(2.55rem, 6.2vw, 5.8rem);
-      line-height: 0.92;
-      font-weight: 700;
-      max-width: 780px;
+      font-family: Avenir Next, Inter, ui-sans-serif, system-ui, sans-serif;
+      font-size: clamp(1.6rem, 2.6vw, 2.15rem);
+      line-height: 1.25;
+      font-weight: 800;
+      max-width: 620px;
     }
 
     .subtle {
@@ -115,7 +112,7 @@
       border: 1px solid var(--line);
       background: rgba(255, 255, 255, 0.78);
       border-radius: 8px;
-      box-shadow: 0 22px 60px rgba(23, 23, 23, 0.09);
+      box-shadow: 0 10px 26px rgba(23, 23, 23, 0.06);
       overflow: hidden;
     }
 
@@ -373,7 +370,7 @@
 
     @media (max-width: 560px) {
       .kpis { grid-template-columns: 1fr; }
-      h1 { font-size: 2.45rem; }
+      h1 { font-size: 1.5rem; }
     }
   </style>
 </head>
@@ -381,9 +378,9 @@
   <header>
     <div class="wrap hero">
       <div>
-        <div class="eyebrow">Apple Silicon local benchmark</div>
-        <h1>AI database systems, measured end to end.</h1>
-        <p class="subtle hero-copy">A local-first benchmark report separating database execution, vector retrieval, Ollama response latency, answer accuracy, and recommendation write-back over a complex account-health workload.</p>
+        <div class="eyebrow">Local benchmark on Apple Silicon</div>
+        <h1>A local test of scaling a database and LLM stack toward production.</h1>
+        <p class="subtle hero-copy">Personal, local-only measurements of database execution, vector retrieval, Ollama response latency, answer accuracy, and recommendation write-back over the same workload.</p>
         <div class="status"><span class="dot"></span><span id="statusText">Loading measured results</span></div>
       </div>
       <div class="hero-board" id="heroBoard"></div>
@@ -401,10 +398,9 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <h2>Benchmark Comparison</h2>
-            <p class="subtle">Median latency by database for the same complex account-health workload, measured locally on the same hardware.</p>
+            <h2>Local Latency Measurements</h2>
+            <p class="subtle">Median latency recorded locally for the same workload on each database, showing how the stack behaves as data scale grows.</p>
           </div>
-          <span class="badge next">No fabricated rows</span>
         </div>
         <div id="chartArea"></div>
       </div>
@@ -414,8 +410,8 @@
       <div class="wrap">
         <div class="section-head">
           <div>
-            <h2>Comparison Summary</h2>
-            <p class="subtle">One table summarising the important factors that decide benchmark performance.</p>
+            <h2>Measurement Summary</h2>
+            <p class="subtle">One table summarising what was measured for each database in this local test.</p>
           </div>
           <span class="badge current">Single table</span>
         </div>
@@ -449,11 +445,6 @@
       return rows.filter(row => latestByDb.get(row.database) === row.benchmark_run_id);
     }
 
-    function fastest(rows, workloadName) {
-      const matches = latestRows(rows).filter(row => row.workload_name === workloadName && Number(row.failures || 0) === 0);
-      return matches.sort((a, b) => Number(a.median_ms || 0) - Number(b.median_ms || 0))[0];
-    }
-
     function latestAgentRows(rows) {
       return latestRows(rows.filter(row => row.workload_category === "ai_agent"));
     }
@@ -470,19 +461,21 @@
     }
 
     function renderHero(rows) {
-      const context = fastest(rows.filter(row => row.workload_category === "ai_agent"), "account_health_360_context_retrieval") || fastest(rows.filter(row => row.workload_category === "ai_agent"), "account_risk_context_retrieval");
-      const e2e = fastest(rows.filter(row => row.workload_category === "ai_agent"), "account_health_360_end_to_end") || fastest(rows.filter(row => row.workload_category === "ai_agent"), "account_risk_end_to_end");
-      const accuracy = latestAgentRows(rows).find(row => row.workload_name === "account_health_360_answer_accuracy");
+      const maxDatasetRows = Math.max(...rows.map(row => Number(row.dataset_rows || 0)), 0);
+      const dbCount = new Set(rows.map(row => row.database)).size;
       const vectorRows = latestVectorRows(rows);
       const vectorDbCount = new Set(vectorRows.map(row => row.database)).size;
-      const bestRecall = vectorRows.length ? Math.max(...vectorRows.map(row => Number(row.retrieval_recall_at_10 || 0))) : 0;
+      const accuracyRows = latestAgentRows(rows).filter(row => row.workload_name === "account_health_360_answer_accuracy");
+      const avgPrecision = accuracyRows.length
+        ? accuracyRows.reduce((sum, row) => sum + Number(row.answer_precision_at_k || 0), 0) / accuracyRows.length
+        : 0;
       const model = latestAgentRows(rows).map(row => parseNotes(row).llm_model).find(Boolean) || "not recorded";
       document.getElementById("heroBoard").innerHTML = [
-        ["Fastest DB phase", context ? context.database : "pending", context ? fmtMs(context.median_ms) : "run llm-benchmark"],
-        ["Fastest E2E LLM", e2e ? e2e.database : "pending", e2e ? fmtMs(e2e.median_ms) : "run llm-benchmark"],
-        ["AI Precision@k", accuracy ? Number(accuracy.answer_precision_at_k || 0).toFixed(3) : "pending", accuracy ? `${displayDatabaseName(accuracy.database)} answer scoring` : "run llm-benchmark"],
-        ["Best Recall@10", bestRecall ? bestRecall.toFixed(3) : "pending", `${vectorDbCount} vector DBs`],
+        ["Dataset scale", maxDatasetRows ? `${fmtNumber(maxDatasetRows)} rows` : "pending", "synthetic enterprise dataset"],
+        ["Databases tested", dbCount, "structured, vector, and LLM workflows"],
+        ["Vector databases tested", vectorDbCount, "local ingest and search"],
         ["Local model", model, "Ollama"],
+        ["Answer accuracy (avg)", accuracyRows.length ? avgPrecision.toFixed(3) : "pending", "precision@k across tested databases"],
       ].map(([key, value, note]) => `<div class="board-row">
         <div class="board-key">${key}</div>
         <div class="board-value">${value}</div>
@@ -642,7 +635,7 @@
       target.innerHTML = `<div class="panel table-wrap">
         <div class="panel-title"><span>Database Performance Summary</span><span class="badge current">${byDb.length} databases</span></div>
         <table>
-          <thead><tr><th>Database</th><th>Mode</th><th>Measured Areas</th><th>Fastest Workload</th><th>Best P95</th><th>LLM E2E</th><th>AI Precision/Recall</th><th>Write-Back</th><th>Recall@10</th><th>Rows</th><th>Storage</th><th>Failures</th></tr></thead>
+          <thead><tr><th>Database</th><th>Mode</th><th>Measured Areas</th><th>Lowest-Latency Workload</th><th>Lowest P95</th><th>LLM E2E</th><th>AI Precision/Recall</th><th>Write-Back</th><th>Recall@10</th><th>Rows</th><th>Storage</th><th>Failures</th></tr></thead>
           <tbody>${table}</tbody>
         </table>
       </div>`;
