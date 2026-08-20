@@ -97,7 +97,7 @@ Dashboard regenerated with:
 
 ## Notes
 
-- Git is initialized (`git init`) but no commit has been created yet; all files are untracked.
+- Git is initialized with commits on `main`, pushed to `https://github.com/Anmol-Mahajan/ai-db-benchmark`.
 - Benchmark results are append-only under `data/results/benchmark_results.jsonl`.
 - Docker services (postgres, qdrant, weaviate) must be started via `./scripts/start_services.sh` before running the `postgres` LLM benchmark or service-backed vector benchmarks.
 - Generated local database artifacts are under `data/generated/`.
