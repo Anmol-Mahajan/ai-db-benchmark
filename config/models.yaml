@@ -1,0 +1,7 @@
+llm:
+  provider: ollama
+  model: null
+
+embedding:
+  provider: ollama
+  model: null

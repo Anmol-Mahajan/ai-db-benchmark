@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence
+
+from ai_db_benchmark.databases.vector_base import directory_size_bytes
+from ai_db_benchmark.vector.schemas import SearchResult, VectorRecord
+
+
+class QdrantLocalAdapter:
+    name = "qdrant-local"
+    index_type = "local-hnsw"
+    distance_metric = "cosine"
+
+    def __init__(self, db_path: Path, collection_name: str = "ai_db_benchmark_vectors") -> None:
+        self.db_path = db_path
+        self.collection_name = collection_name
+        self._client = None
+
+    def connect(self) -> None:
+        try:
+            from qdrant_client import QdrantClient
+        except ImportError as exc:
+            raise RuntimeError("Qdrant benchmark requires qdrant-client; install with .[vector]") from exc
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._client = QdrantClient(path=str(self.db_path))
+
+    def close(self) -> None:
+        if self._client is not None:
+            close = getattr(self._client, "close", None)
+            if close:
+                close()
+        self._client = None
+
+    @property
+    def client(self):  # type: ignore[no-untyped-def]
+        if self._client is None:
+            raise RuntimeError("QdrantLocalAdapter is not connected")
+        return self._client
+
+    def reset(self) -> None:
+        self.close()
+        if self.db_path.exists():
+            shutil.rmtree(self.db_path)
+        self.connect()
+
+    def create_collection(self, dimension: int) -> None:
+        from qdrant_client import models
+
+        if self.client.collection_exists(self.collection_name):
+            self.client.delete_collection(self.collection_name)
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=models.VectorParams(size=dimension, distance=models.Distance.COSINE),
+        )
+
+    def upsert_vectors(self, records: Sequence[VectorRecord]) -> int:
+        from qdrant_client import models
+
+        points = [
+            models.PointStruct(
+                id=index + 1,
+                vector=record.vector,
+                payload={**record.metadata, "record_id": record.record_id, "document": record.document},
+            )
+            for index, record in enumerate(records)
+        ]
+        self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+        return len(records)
+
+    def search(self, vector: Sequence[float], top_k: int, filters: Optional[Dict[str, object]] = None) -> List[SearchResult]:
+        query_filter = None
+        if filters:
+            from qdrant_client import models
+
+            query_filter = models.Filter(
+                must=[
+                    models.FieldCondition(key=key, match=models.MatchValue(value=value))
+                    for key, value in filters.items()
+                ]
+            )
+
+        if hasattr(self.client, "query_points"):
+            response = self.client.query_points(
+                collection_name=self.collection_name,
+                query=list(vector),
+                query_filter=query_filter,
+                limit=top_k,
+                with_payload=True,
+            )
+            points = response.points
+        else:
+            points = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=list(vector),
+                query_filter=query_filter,
+                limit=top_k,
+                with_payload=True,
+            )
+        return [
+            SearchResult(
+                record_id=str(point.payload.get("record_id")),
+                score=float(point.score),
+                metadata=dict(point.payload),
+            )
+            for point in points
+        ]
+
+    def count(self) -> int:
+        return int(self.client.count(collection_name=self.collection_name, exact=True).count)
+
+    def database_version(self) -> str:
+        try:
+            import qdrant_client
+
+            return str(getattr(qdrant_client, "__version__", "qdrant-client"))
+        except ImportError:
+            return "missing"
+
+    def storage_bytes(self) -> int:
+        return directory_size_bytes(self.db_path)

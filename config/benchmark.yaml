@@ -1,0 +1,22 @@
+dataset_size: smoke
+seed: 42
+warmup_iterations: 2
+measured_iterations: 5
+batch_size: 100
+top_k: 10
+vector_dimension: 64
+store_raw_samples: true
+
+dataset_sizes:
+  smoke: 1000
+  small: 10000
+  medium: 100000
+  million: 120663
+  large: 500000
+
+vector_dataset_sizes:
+  smoke: 1000
+  small: 10000
+  medium: 50000
+  million: 100000
+  large: 100000
