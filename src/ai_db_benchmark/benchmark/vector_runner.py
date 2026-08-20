@@ -16,8 +16,15 @@ from ai_db_benchmark.vector.schemas import VectorRecord
 
 
 class VectorBenchmarkRunner:
-    def __init__(self, config: BenchmarkConfig) -> None:
+    def __init__(
+        self,
+        config: BenchmarkConfig,
+        embedding_model_name: str = EMBEDDING_MODEL_NAME,
+        embedding_dimension: Optional[int] = None,
+    ) -> None:
         self.config = config
+        self.embedding_model_name = embedding_model_name
+        self.embedding_dimension = embedding_dimension if embedding_dimension is not None else config.vector_dimension
 
     def run(
         self,
@@ -243,8 +250,8 @@ class VectorBenchmarkRunner:
             row_count=row_count,
             notes=notes,
             vector_count=vector_count,
-            embedding_model=EMBEDDING_MODEL_NAME,
-            embedding_dimension=self.config.vector_dimension,
+            embedding_model=self.embedding_model_name,
+            embedding_dimension=self.embedding_dimension,
             distance_metric=adapter.distance_metric,
             index_type=adapter.index_type,
             retrieval_recall_at_5=round(recall_5, 6),

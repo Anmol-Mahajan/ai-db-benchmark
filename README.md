@@ -156,9 +156,19 @@ Or run all local vector stores:
 python -m ai_db_benchmark.cli vector-benchmark --database embedded --vectors 100 --customers 100 --warmup 1 --iterations 3 --top-k 10 --dimension 64
 ```
 
-The vector stage uses deterministic local hash embeddings for smoke testing. Embeddings are generated outside the measured database operations and fed identically to each vector store. The benchmark records vector count, embedding model, dimension, distance metric, index type, Recall@5, and Recall@10.
+The vector stage uses deterministic local hash embeddings for smoke testing by default. Embeddings are generated outside the measured database operations and fed identically to each vector store. The benchmark records vector count, embedding model, dimension, distance metric, index type, Recall@5, and Recall@10.
 
 Milvus Lite may need permission to bind a local Unix socket in restricted environments.
+
+### Real Embeddings
+
+Pass `--embedding-model` to replace the deterministic hash embedding with a real local Ollama embedding model (e.g. `nomic-embed-text`, pulled with `ollama pull nomic-embed-text`). The dimension is detected automatically from the model:
+
+```bash
+python -m ai_db_benchmark.cli vector-benchmark --database embedded --vectors 1000 --customers 1000 --warmup 1 --iterations 3 --top-k 10 --embedding-model nomic-embed-text
+```
+
+This is the production-shaped path: real 768-dimension semantic embeddings, ingested and searched the same way an application would use them. It measures the same ingestion, search, filtered search, and Recall@k as the hash-embedding smoke test, but the recorded `embedding_model` and `embedding_dimension` reflect the real model used.
 
 ## Docker Service Benchmarks
 

@@ -72,6 +72,22 @@ Once the LLM starts generating, the database gap almost disappears into the nois
 
 **Vector search recall@10, across 7 vector databases:** every database returned 1.000. At this scale (100 vectors), recall isn't the differentiator between vector databases — deployment mode, operational overhead, and cost are.
 
+## Re-testing with real embeddings, not just hash vectors
+
+The vector benchmark's default embedding is a deterministic hash function — fast and reproducible, but not semantically meaningful. To see how the databases behave under a production-shaped workload, I re-ran all 7 vector databases with real 768-dimension embeddings from a local Ollama model (`nomic-embed-text`), ingesting and searching 1,000 real embeddings each (`vector-benchmark --embedding-model nomic-embed-text`):
+
+| Database | Ingest (1,000 vectors) | Top-k search | Recall@10 |
+|---|---:|---:|---:|
+| LanceDB | 15.93 ms | 3.90 ms | 1.000 |
+| Milvus Lite | 186.48 ms | 1.25 ms | 1.000 |
+| PostgreSQL + pgvector | 309.66 ms | 6.04 ms | 1.000 |
+| Chroma | 651.72 ms | 2.73 ms | 1.000 |
+| Qdrant Server | 714.02 ms | 7.28 ms | 1.000 |
+| Weaviate | 936.97 ms | 6.27 ms | 1.000 |
+| Qdrant Local | 973.42 ms | 2.02 ms | 1.000 |
+
+Recall stayed perfect across every database, even with real semantic embeddings — so at this scale, recall still isn't what separates them. Ingest latency is where the real gap shows up: LanceDB was roughly 60x faster than Qdrant Local for the same 1,000 real embeddings, and the embedded, file-based stores (LanceDB, Milvus Lite) meaningfully outpaced the Docker-service stores (Qdrant Server, Weaviate) on ingest, while search latency differences were much smaller across the board.
+
 ## A design decision worth explaining: why the LLM never touches raw rows
 
 The AI-agent workflow does not let the model query the database or embed individual rows. It retrieves context through one approved SQL join across customers, contracts, invoices, support tickets, notes, and call transcripts, and only that joined JSON is sent to the model.
@@ -95,7 +111,7 @@ Full step-by-step instructions are in [docs/RUNBOOK.md](RUNBOOK.md). Current pro
 ## Scope and honesty about limits
 
 - This is a single-node, single-request benchmark on one Apple Silicon machine — not a concurrency or production-load study.
-- Vector benchmarks use small (100-vector) deterministic hash embeddings for smoke testing, not real semantic embeddings at scale.
+- Vector benchmarks default to small (100-vector) deterministic hash embeddings for fast smoke testing; the `--embedding-model` flag switches to real local Ollama embeddings but was only tested up to 1,000 vectors here, not at million-row scale.
 - Ollama generation time depends heavily on local hardware and the specific model (`qwen3:4b-instruct` here); it is not representative of hosted LLM APIs.
 - No results are fabricated — everything shown in the dashboard is a real measured run, appended to `data/results/benchmark_results.jsonl`.
 

@@ -54,6 +54,13 @@ class OllamaClient:
             latency_ms=elapsed_ms,
         )
 
+    def embed(self, text: str, model: str) -> List[float]:
+        payload = self._post_json("/api/embed", {"model": model, "input": text})
+        embeddings = payload.get("embeddings")
+        if not embeddings:
+            raise OllamaUnavailable(f"Ollama embedding response missing 'embeddings' for model {model}")
+        return [float(value) for value in embeddings[0]]
+
     def _get_json(self, path: str) -> Dict[str, object]:
         request = Request(f"{self.base_url}{path}", method="GET")
         try:

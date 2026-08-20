@@ -602,10 +602,23 @@ DASHBOARD_TEMPLATE = r"""<!doctype html>
       const recallEntries = [...recallByDb.entries()]
         .sort((a, b) => b[1] - a[1])
         .map(([database, recall]) => ({ label: displayDatabaseName(database), value: recall, display: recall.toFixed(3), color: databaseColor(database) }));
+      const ingestEntries = latestVectorRows(rows)
+        .filter(row => row.workload_name === "vector_ingest")
+        .slice()
+        .sort((a, b) => Number(a.median_ms || 0) - Number(b.median_ms || 0))
+        .map(row => ({ label: displayDatabaseName(row.database), value: Number(row.median_ms || 0), display: fmtMs(row.median_ms), color: databaseColor(row.database) }));
+      const searchEntries = latestVectorRows(rows)
+        .filter(row => row.workload_name === "vector_search_top_k")
+        .slice()
+        .sort((a, b) => Number(a.median_ms || 0) - Number(b.median_ms || 0))
+        .map(row => ({ label: displayDatabaseName(row.database), value: Number(row.median_ms || 0), display: fmtMs(row.median_ms), color: databaseColor(row.database) }));
+      const embeddingModel = latestVectorRows(rows).map(row => row.embedding_model).find(Boolean) || "not recorded";
       const charts = [
         barChart("Structured Query Latency (complex account-health, 1M rows)", "current", structuredEntries),
         barChart("LLM End-to-End Latency (context + generation + write-back)", "llm", llmEntries),
-        barChart("Vector Search Recall@10", "next", recallEntries),
+        barChart(`Vector Ingest Latency (${embeddingModel})`, "next", ingestEntries),
+        barChart(`Vector Top-K Search Latency (${embeddingModel})`, "next", searchEntries),
+        barChart("Vector Search Recall@10", "current", recallEntries),
       ].filter(Boolean).join("");
       target.innerHTML = charts || `<div class="empty">No measured result rows yet.</div>`;
     }

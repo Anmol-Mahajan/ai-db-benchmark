@@ -28,7 +28,7 @@ from ai_db_benchmark.databases.workbook_sqlite import import_workbook_to_sqlite
 from ai_db_benchmark.doctor import run_doctor
 from ai_db_benchmark.importers.excel import preview_workbook
 from ai_db_benchmark.llm.ollama_client import OllamaClient, OllamaUnavailable
-from ai_db_benchmark.vector.embeddings import build_vector_records
+from ai_db_benchmark.vector.embeddings import EMBEDDING_MODEL_NAME, build_vector_records, make_ollama_embed_fn
 from ai_db_benchmark.workloads.excel_risk import (
     run_workbook_account_risk_query,
     workbook_context_for_llm,
@@ -126,6 +126,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     vector_parser.add_argument("--iterations", type=int, default=None)
     vector_parser.add_argument("--top-k", type=int, default=None)
     vector_parser.add_argument("--dimension", type=int, default=None)
+    vector_parser.add_argument("--embedding-model", default=None, help="Local Ollama embedding model to use instead of the deterministic hash embedding")
     vector_parser.add_argument("--results", type=Path, default=project_path("data", "results", "benchmark_results.jsonl"))
 
     report_parser = subparsers.add_parser("report", help="Print a compact result table")
@@ -391,7 +392,18 @@ def _vector_benchmark(args: argparse.Namespace) -> int:
     vector_limit = args.vectors if args.vectors is not None else config.vector_count
     customer_count = max(config.customer_count, vector_limit)
     dataset = generate_enterprise_dataset(customer_count, seed=config.seed, name=f"synthetic-enterprise-{config.dataset_size}")
-    records = build_vector_records(dataset, dimension=config.vector_dimension, limit=vector_limit)
+
+    embed_fn = None
+    embedding_model_name = EMBEDDING_MODEL_NAME
+    embedding_dimension = config.vector_dimension
+    if args.embedding_model:
+        embed_fn = make_ollama_embed_fn(args.embedding_model)
+        probe_vector = embed_fn("embedding dimension probe")
+        embedding_model_name = f"ollama:{args.embedding_model}"
+        embedding_dimension = len(probe_vector)
+        print(f"Using real embeddings from Ollama model {args.embedding_model} ({embedding_dimension} dimensions)")
+
+    records = build_vector_records(dataset, dimension=config.vector_dimension, limit=vector_limit, embed_fn=embed_fn)
     if len(records) < vector_limit:
         raise RuntimeError(f"generated only {len(records)} vector records; expected {vector_limit}")
 
@@ -403,7 +415,7 @@ def _vector_benchmark(args: argparse.Namespace) -> int:
         run_id = utc_run_id(adapter.name, config.dataset_size, "vector")
         print(f"Running vector benchmark for {adapter.name} with {len(records)} vectors...")
         try:
-            runner = VectorBenchmarkRunner(config)
+            runner = VectorBenchmarkRunner(config, embedding_model_name=embedding_model_name, embedding_dimension=embedding_dimension)
             results = runner.run(adapter, records, run_id, dataset.name, dataset.stable_hash(), config.seed)
         except Exception as exc:
             failed = True

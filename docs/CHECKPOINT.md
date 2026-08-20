@@ -1,6 +1,6 @@
 # AI Database Benchmark Checkpoint
 
-Saved at: 2026-08-20T22:59:00Z
+Saved at: 2026-08-20T23:00:00Z
 
 ## Current State
 
@@ -8,12 +8,12 @@ The project now contains a local-first AI database benchmark framework with:
 
 - deterministic synthetic enterprise data generation
 - SQLite, DuckDB, and PostgreSQL relational baselines (`postgres` adapter, LLM benchmark only)
-- vector benchmarks for Chroma, LanceDB, Milvus Lite, Qdrant Local, Qdrant Server, PostgreSQL + pgvector, and Weaviate
+- vector benchmarks for Chroma, LanceDB, Milvus Lite, Qdrant Local, Qdrant Server, PostgreSQL + pgvector, and Weaviate, with a deterministic hash embedding for smoke tests and an optional real local Ollama embedding model (`--embedding-model`) for production-shaped runs
 - Excel workbook preview/import/query support
 - local Ollama response benchmarking
 - LLM answer accuracy scoring against the database-ranked ground truth
 - AI recommendation write-back and read-back verification through `ai_recommendations`
-- compact static dashboard at `dashboard/index.html`
+- compact static dashboard at `dashboard/index.html` with bar-chart comparisons for structured latency, LLM end-to-end latency, vector ingest/search latency, and vector recall
 - pytest coverage for adapters, workloads, dashboard, Excel import, vector utilities, metrics, and LLM runner
 
 ## Databases In Scope
@@ -74,6 +74,24 @@ Run IDs:
 - `20260820T215017Z-sqlite-million-llm`
 - `20260820T215106Z-duckdb-million-llm`
 - `20260820T220851Z-postgres-million-llm`
+
+## Real-Embedding Vector Results (1,000 vectors, `nomic-embed-text`, 768 dimensions)
+
+All 7 vector databases ran with real local Ollama embeddings instead of the deterministic hash embedding (`vector-benchmark --embedding-model nomic-embed-text`):
+
+| Database | Ingest (1,000 vectors) | Top-k search | Recall@10 |
+|---|---:|---:|---:|
+| LanceDB | 15.933 ms | 3.898 ms | 1.000 |
+| Milvus Lite | 186.478 ms | 1.248 ms | 1.000 |
+| PostgreSQL + pgvector | 309.659 ms | 6.039 ms | 1.000 |
+| Chroma | 651.721 ms | 2.732 ms | 1.000 |
+| Qdrant Server | 714.017 ms | 7.281 ms | 1.000 |
+| Weaviate | 936.971 ms | 6.267 ms | 1.000 |
+| Qdrant Local | 973.424 ms | 2.022 ms | 1.000 |
+
+Every database returned perfect recall@10 with real embeddings too, so at this scale the differentiator is ingest/search latency and operational overhead, not accuracy. LanceDB was roughly 60x faster than Qdrant Local on ingest for the same 1,000 real embeddings.
+
+Run ID prefix: `20260820T2258*-*-custom-vector`
 
 ## Verification
 

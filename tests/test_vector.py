@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Sequence
 from ai_db_benchmark.benchmark.vector_runner import VectorBenchmarkRunner
 from ai_db_benchmark.config import BenchmarkConfig
 from ai_db_benchmark.data.generator import generate_enterprise_dataset
-from ai_db_benchmark.vector.embeddings import build_vector_records, embed_text
+from ai_db_benchmark.vector.embeddings import build_vector_records, embed_text, make_ollama_embed_fn
 from ai_db_benchmark.vector.evaluation import exact_top_k, recall_at_k
 from ai_db_benchmark.vector.schemas import SearchResult, VectorRecord
 
@@ -24,6 +24,32 @@ def test_vector_records_use_enterprise_metadata() -> None:
 
     assert len(records) == 10
     assert {"customer_id", "segment", "region", "industry"} <= set(records[0].metadata)
+
+
+def test_build_vector_records_uses_custom_embed_fn() -> None:
+    dataset = generate_enterprise_dataset(20, seed=11)
+    calls: List[str] = []
+
+    def fake_embed(text: str) -> List[float]:
+        calls.append(text)
+        return [3.0, 4.0]
+
+    records = build_vector_records(dataset, dimension=8, limit=3, embed_fn=fake_embed)
+
+    assert len(records) == 3
+    assert len(calls) == 3
+    assert all(record.vector == [3.0, 4.0] for record in records)
+
+
+class FakeOllamaClient:
+    def embed(self, text: str, model: str) -> List[float]:
+        return [1.0, 0.0, 0.0]
+
+
+def test_make_ollama_embed_fn_normalises_client_vector() -> None:
+    embed_fn = make_ollama_embed_fn("nomic-embed-text", client=FakeOllamaClient())
+
+    assert embed_fn("hello") == [1.0, 0.0, 0.0]
 
 
 def test_exact_recall_metrics() -> None:
@@ -67,6 +93,41 @@ def test_vector_runner_records_search_and_recall(tmp_path: Path) -> None:
     assert {"vector_ingest", "vector_search_top_k", "vector_filtered_search_top_k"} <= names
     assert all(result.failures == 0 for result in results)
     assert [result for result in results if result.workload_name == "vector_search_top_k"][0].retrieval_recall_at_5 == 1.0
+
+
+def test_vector_runner_records_configured_embedding_metadata(tmp_path: Path) -> None:
+    dataset = generate_enterprise_dataset(30, seed=13)
+    records = build_vector_records(dataset, dimension=8, limit=15)
+    config = BenchmarkConfig(
+        dataset_size="custom",
+        seed=13,
+        warmup_iterations=1,
+        measured_iterations=2,
+        top_k=5,
+        vector_dimension=8,
+        dataset_sizes={"custom": 30},
+        vector_dataset_sizes={"custom": 15},
+    )
+    adapter = ExactMemoryVectorAdapter(tmp_path)
+    adapter.connect()
+    try:
+        results = VectorBenchmarkRunner(
+            config,
+            embedding_model_name="ollama:nomic-embed-text",
+            embedding_dimension=768,
+        ).run(
+            adapter,
+            records,
+            benchmark_run_id="test-vector-run-real-embed",
+            dataset_name=dataset.name,
+            dataset_hash=dataset.stable_hash(),
+            seed=dataset.seed,
+        )
+    finally:
+        adapter.close()
+
+    assert all(result.embedding_model == "ollama:nomic-embed-text" for result in results)
+    assert all(result.embedding_dimension == 768 for result in results)
 
 
 class ExactMemoryVectorAdapter:
