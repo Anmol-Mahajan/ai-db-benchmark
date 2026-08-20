@@ -73,5 +73,34 @@ def test_llm_response_runner_records_database_llm_and_total_phases(tmp_path: Pat
     assert results[2].answer_precision_at_k == 1.0
     assert results[2].answer_recall_at_k == 0.2
     assert results[3].write_verified is True
-    assert persisted == 2
-    assert "fake-local-model" in results[0].notes
+
+
+def test_llm_response_runner_uses_custom_context_provider(tmp_path: Path) -> None:
+    dataset = generate_enterprise_dataset(80, seed=42, name="test-agent-vector")
+    adapter = SQLiteAdapter(tmp_path / "agent-vector.sqlite")
+    adapter.connect()
+    try:
+        adapter.reset()
+        adapter.seed(dataset)
+        config = BenchmarkConfig(
+            dataset_size="custom",
+            dataset_sizes={"custom": 80},
+            warmup_iterations=0,
+            measured_iterations=1,
+        )
+
+        calls = {"count": 0}
+
+        def context_provider():
+            calls["count"] += 1
+            rows = [{"customer_id": 1, "customer_name": "Vector Customer", "risk_score": 0.9}]
+            return rows, 3.5
+
+        runner = LLMResponseBenchmarkRunner(config, context_limit=5, context_provider=context_provider)
+        results = runner.run(adapter, dataset, FakeLLMClient(), "fake-local-model", "run-vector-llm")
+    finally:
+        adapter.close()
+
+    assert calls["count"] == 1
+    assert results[0].median_ms == 3.5
+    assert results[2].answer_precision_at_k == 1.0

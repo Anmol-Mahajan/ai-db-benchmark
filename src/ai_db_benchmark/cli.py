@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
+import time
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Mapping, Optional
 
 from ai_db_benchmark.benchmark.results import append_results_jsonl, load_results_jsonl, utc_run_id, write_results_csv
 from ai_db_benchmark.benchmark.llm_runner import LLMResponseBenchmarkRunner
@@ -29,6 +31,8 @@ from ai_db_benchmark.doctor import run_doctor
 from ai_db_benchmark.importers.excel import preview_workbook
 from ai_db_benchmark.llm.ollama_client import OllamaClient, OllamaUnavailable
 from ai_db_benchmark.vector.embeddings import EMBEDDING_MODEL_NAME, build_vector_records, make_ollama_embed_fn
+from ai_db_benchmark.vector.evaluation import exact_top_k
+from ai_db_benchmark.workloads.agent_workflows import ACCOUNT_HEALTH_360_QUESTION
 from ai_db_benchmark.workloads.excel_risk import (
     run_workbook_account_risk_query,
     workbook_context_for_llm,
@@ -129,6 +133,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     vector_parser.add_argument("--embedding-model", default=None, help="Local Ollama embedding model to use instead of the deterministic hash embedding")
     vector_parser.add_argument("--results", type=Path, default=project_path("data", "results", "benchmark_results.jsonl"))
 
+    vector_llm_parser = subparsers.add_parser(
+        "vector-llm-benchmark",
+        help="Run the LLM agent workflow using vector search over existing relational data as the context source, instead of the SQL join",
+    )
+    vector_llm_parser.add_argument("--database", choices=["sqlite", "duckdb", "postgres"], default="duckdb", help="Relational adapter used for ground-truth ranking and recommendation write-back")
+    vector_llm_parser.add_argument("--model", default=None)
+    vector_llm_parser.add_argument("--embedding-model", default="nomic-embed-text")
+    vector_llm_parser.add_argument("--size", choices=["smoke", "small", "medium", "million", "large"], default=None)
+    vector_llm_parser.add_argument("--customers", type=int, default=None)
+    vector_llm_parser.add_argument("--vectors", type=int, default=None)
+    vector_llm_parser.add_argument("--seed", type=int, default=None)
+    vector_llm_parser.add_argument("--warmup", type=int, default=0)
+    vector_llm_parser.add_argument("--iterations", type=int, default=1)
+    vector_llm_parser.add_argument("--context-limit", type=int, default=5)
+    vector_llm_parser.add_argument("--results", type=Path, default=project_path("data", "results", "benchmark_results.jsonl"))
+
     report_parser = subparsers.add_parser("report", help="Print a compact result table")
     report_parser.add_argument("--results", type=Path, default=project_path("data", "results", "benchmark_results.jsonl"))
 
@@ -156,6 +176,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return _benchmark(args)
     if args.command == "vector-benchmark":
         return _vector_benchmark(args)
+    if args.command == "vector-llm-benchmark":
+        return _vector_llm_benchmark(args)
     if args.command == "report":
         return _report(args.results)
     if args.command == "dashboard":
@@ -341,6 +363,114 @@ def _llm_benchmark(args: argparse.Namespace) -> int:
     if all_results:
         print(f"Results appended to: {args.results}")
     return 1 if failed and not all_results else 0
+
+
+def _vector_llm_benchmark(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    dataset = generate_enterprise_dataset(config.customer_count, seed=config.seed, name=f"synthetic-enterprise-{config.dataset_size}")
+
+    client = OllamaClient()
+    try:
+        model = client.choose_model(args.model)
+    except OllamaUnavailable as exc:
+        print(f"Ollama unavailable: {exc}", file=sys.stderr)
+        return 1
+
+    adapter = _adapter(args.database)
+    adapter.connect()
+    adapter.reset()
+    adapter.seed(dataset)
+    ground_truth_rows = adapter.complex_account_health(args.context_limit)
+    ground_truth_ids = [int(row["customer_id"]) for row in ground_truth_rows if row.get("customer_id") is not None]
+
+    vector_limit = args.vectors if args.vectors is not None else config.vector_count
+    embed_fn = make_ollama_embed_fn(args.embedding_model)
+    print(f"Embedding {vector_limit} customer notes and call transcripts with Ollama model {args.embedding_model}...")
+    vector_records = build_vector_records(dataset, dimension=config.vector_dimension, limit=vector_limit, embed_fn=embed_fn)
+    records_by_id = {record.record_id: record for record in vector_records}
+    question_vector = embed_fn(ACCOUNT_HEALTH_360_QUESTION)
+    search_k = max(args.context_limit * 6, 30)
+
+    captured_context_ids: List[int] = []
+
+    def context_provider():
+        started_ns = time.perf_counter_ns()
+        matches = exact_top_k(vector_records, question_vector, top_k=search_k)
+        seen_customer_ids: List[int] = []
+        rows: List[Mapping[str, object]] = []
+        for record_id in matches:
+            record = records_by_id[record_id]
+            customer_id = int(record.metadata["customer_id"])
+            if customer_id in seen_customer_ids:
+                continue
+            seen_customer_ids.append(customer_id)
+            rows.append(
+                {
+                    "customer_id": customer_id,
+                    "source": record.metadata["source"],
+                    "segment": record.metadata["segment"],
+                    "region": record.metadata["region"],
+                    "industry": record.metadata["industry"],
+                    "matched_text": record.document[:400],
+                }
+            )
+            if len(rows) >= args.context_limit:
+                break
+        elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+        captured_context_ids.clear()
+        captured_context_ids.extend(seen_customer_ids)
+        return rows, elapsed_ms
+
+    run_id = utc_run_id(f"{adapter.name}-vector-rag", config.dataset_size, "llm")
+    print(f"Running vector-context LLM benchmark for {adapter.name} (context via vector search) with model {model}...")
+    try:
+        runner = LLMResponseBenchmarkRunner(config, context_limit=args.context_limit, context_provider=context_provider)
+        results = runner.run(
+            adapter,
+            dataset,
+            client,
+            model,
+            run_id,
+            retrieval_description=(
+                "vector search over real Ollama embeddings of existing customer notes and call transcripts, "
+                "used as the context source instead of the SQL join"
+            ),
+        )
+    finally:
+        adapter.close()
+
+    labeled_results = [
+        dataclasses.replace(
+            result,
+            database=f"{args.database}-vector-rag",
+            architecture=f"local-ollama-vector-rag-{args.embedding_model}",
+        )
+        for result in results
+    ]
+    append_results_jsonl(args.results, labeled_results)
+    write_results_csv(args.results.with_suffix(".csv"), labeled_results)
+
+    overlap = len(set(captured_context_ids) & set(ground_truth_ids)) / len(ground_truth_ids) if ground_truth_ids else 0.0
+    print(f"Run id: {run_id}")
+    print(
+        f"Vector-retrieved accounts overlap with the SQL-ranked accounts: "
+        f"{len(set(captured_context_ids) & set(ground_truth_ids))}/{len(ground_truth_ids)} ({overlap:.3f})"
+    )
+    for result in labeled_results:
+        line = (
+            f"{result.database:20} {result.workload_name:40} "
+            f"median={result.median_ms:.3f}ms p95={result.p95_ms:.3f}ms failures={result.failures}"
+        )
+        if result.workload_name == "account_health_360_answer_accuracy":
+            line += (
+                f" precision@k={result.answer_precision_at_k:.3f}"
+                f" recall@k={result.answer_recall_at_k:.3f}"
+                f" rank_accuracy={result.answer_rank_accuracy:.3f}"
+                f" hallucination_rate={result.answer_hallucination_rate:.3f}"
+            )
+        print(line)
+    print(f"Results appended to: {args.results}")
+    return 0
 
 
 def _print_risk_query_result(result, show_sql: bool = False) -> None:

@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from ai_db_benchmark.benchmark.metrics import summarize_latencies
 from ai_db_benchmark.benchmark.results import BenchmarkResult
@@ -19,6 +19,10 @@ from ai_db_benchmark.workloads.agent_workflows import account_health_360_context
 
 class LocalLLMClient(Protocol):
     def generate(self, prompt: str, model: str, temperature: float = 0.0) -> OllamaGeneration: ...
+
+
+# Returns (context rows, retrieval time in ms) so context can come from SQL or a vector search.
+ContextProvider = Callable[[], Tuple[List[Mapping[str, object]], float]]
 
 
 @dataclass(frozen=True)
@@ -49,11 +53,17 @@ class AgentIteration:
 
 
 class LLMResponseBenchmarkRunner:
-    def __init__(self, config: BenchmarkConfig, context_limit: int = 10) -> None:
+    def __init__(
+        self,
+        config: BenchmarkConfig,
+        context_limit: int = 10,
+        context_provider: Optional[ContextProvider] = None,
+    ) -> None:
         if context_limit < 1:
             raise ValueError("context_limit must be >= 1")
         self.config = config
         self.context_limit = context_limit
+        self.context_provider = context_provider
 
     def run(
         self,
@@ -62,6 +72,7 @@ class LLMResponseBenchmarkRunner:
         llm_client: LocalLLMClient,
         model: str,
         benchmark_run_id: str,
+        retrieval_description: str = "database execution time for the predefined renewal-risk context query",
     ) -> List[BenchmarkResult]:
         for _ in range(self.config.warmup_iterations):
             self._run_iteration(adapter, llm_client, model)
@@ -90,7 +101,7 @@ class LLMResponseBenchmarkRunner:
                 failures,
                 "account_health_360_context_retrieval",
                 [iteration.retrieval_ms for iteration in iterations],
-                "database execution time for the predefined renewal-risk context query",
+                retrieval_description,
             ),
             self._result(
                 adapter,
@@ -154,9 +165,12 @@ class LLMResponseBenchmarkRunner:
     ) -> AgentIteration:
         total_started = time.perf_counter_ns()
 
-        retrieval_started = time.perf_counter_ns()
-        rows = adapter.complex_account_health(self.context_limit)
-        retrieval_ms = (time.perf_counter_ns() - retrieval_started) / 1_000_000
+        if self.context_provider:
+            rows, retrieval_ms = self.context_provider()
+        else:
+            retrieval_started = time.perf_counter_ns()
+            rows = adapter.complex_account_health(self.context_limit)
+            retrieval_ms = (time.perf_counter_ns() - retrieval_started) / 1_000_000
 
         context = account_health_360_context(rows)
         prompt = renewal_risk_prompt(context)

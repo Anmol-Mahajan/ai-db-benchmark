@@ -313,7 +313,7 @@ DASHBOARD_TEMPLATE = r"""<!doctype html>
 
     .bar-row {
       display: grid;
-      grid-template-columns: minmax(170px, 260px) minmax(0, 1fr) 108px;
+      grid-template-columns: minmax(210px, 300px) minmax(0, 1fr) 108px;
       gap: 10px;
       align-items: center;
       min-height: 34px;
@@ -540,10 +540,14 @@ DASHBOARD_TEMPLATE = r"""<!doctype html>
         "qdrant-local": "Qdrant Local",
         "qdrant-server": "Qdrant Server",
         "weaviate": "Weaviate",
+        "duckdb-vector-rag": "DuckDB + vector search",
+        "sqlite-vector-rag": "SQLite + vector search",
+        "postgres-vector-rag": "PostgreSQL + vector search",
       }[name] || name;
     }
 
     function databaseColor(name) {
+      if (name.endsWith("-vector-rag")) return "var(--amber)";
       if (["sqlite", "duckdb"].includes(name)) return "var(--teal)";
       if (name === "postgres") return "var(--blue)";
       if (["pgvector", "qdrant-server", "weaviate"].includes(name)) return "var(--blue)";
@@ -551,6 +555,7 @@ DASHBOARD_TEMPLATE = r"""<!doctype html>
     }
 
     function databaseMode(name) {
+      if (name.endsWith("-vector-rag")) return "Vector-search context (local test)";
       if (["sqlite", "duckdb"].includes(name)) return "Structured baseline";
       if (name === "postgres") return "Docker relational service";
       if (["pgvector", "qdrant-server", "weaviate"].includes(name)) return "Docker service vector";
@@ -587,6 +592,21 @@ DASHBOARD_TEMPLATE = r"""<!doctype html>
         .slice()
         .sort((a, b) => Number(a.median_ms || 0) - Number(b.median_ms || 0))
         .map(row => ({ label: displayDatabaseName(row.database), value: Number(row.median_ms || 0), display: fmtMs(row.median_ms), color: databaseColor(row.database) }));
+      const contextRetrievalEntries = latestAgentRows(rows)
+        .filter(row => row.workload_name === "account_health_360_context_retrieval" || row.workload_name === "account_risk_context_retrieval")
+        .slice()
+        .sort((a, b) => Number(a.median_ms || 0) - Number(b.median_ms || 0))
+        .map(row => {
+          const isVectorRag = row.database.endsWith("-vector-rag");
+          const baseName = displayDatabaseName(row.database.replace("-vector-rag", ""));
+          const label = isVectorRag ? `${baseName} + vector search` : baseName;
+          return {
+            label: `${label} (${fmtNumber(row.dataset_rows)} rows)`,
+            value: Number(row.median_ms || 0),
+            display: fmtMs(row.median_ms),
+            color: databaseColor(row.database),
+          };
+        });
       const recallByDb = new Map();
       for (const row of rows.filter(row => row.workload_category === "vector")) {
         const current = recallByDb.get(row.database) || 0;
@@ -608,6 +628,7 @@ DASHBOARD_TEMPLATE = r"""<!doctype html>
       const embeddingModel = latestVectorRows(rows).map(row => row.embedding_model).find(Boolean) || "not recorded";
       const charts = [
         barChart("Structured Query Latency (complex account-health, 1M rows)", "current", structuredEntries),
+        barChart("LLM Context Retrieval Latency (SQL join vs. vector search over notes/calls, dataset size noted per bar)", "next", contextRetrievalEntries),
         barChart("LLM End-to-End Latency (context + generation + write-back)", "llm", llmEntries),
         barChart(`Vector Ingest Latency (${embeddingModel})`, "next", ingestEntries),
         barChart(`Vector Top-K Search Latency (${embeddingModel})`, "next", searchEntries),

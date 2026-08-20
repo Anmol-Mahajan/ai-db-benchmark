@@ -1,6 +1,6 @@
 # LinkedIn Post Draft
 
-Copy the text below directly into LinkedIn. Attach `dashboard/screenshot-hero.png` and `dashboard/screenshot-comparison.png` as the two images.
+Copy the text below directly into LinkedIn. Attach `dashboard/Measurement Summary.png` and `dashboard/Performance Comparison.png` as the two images (retake these from the dashboard if you want the new vector-search context-retrieval chart included).
 
 ---
 
@@ -12,11 +12,11 @@ A few things I didn't expect:
 
 → DuckDB answered the complex analytical join in 70ms. SQLite took 610ms. Same query, same 1M rows, same machine — an 8-9x gap that's easy to miss if you only ever test with small data.
 
-→ That gap almost disappears once the LLM starts talking. End-to-end, Ollama generation took 35-48 seconds regardless of which database sat underneath it. At today's local-LLM speeds, the database is rarely your bottleneck — but it will be the moment you're doing this at real traffic, not one request at a time.
+→ That gap almost disappears once the LLM starts talking. End-to-end, Ollama generation took 35-48 seconds regardless of which database sat underneath it — including PostgreSQL, whose own query was just as fast as SQLite's; its longer end-to-end time tracked back to local machine load, not the database.
 
 → Every vector database returned perfect recall@10 on the retrieval task. At this scale, accuracy isn't the differentiator — operational overhead, deployment mode, and cost are.
 
-One design choice that mattered: the LLM never touches the raw tables. Context comes from one approved SQL join across customers, contracts, invoices, support tickets, notes, and calls — because a single order row (or a single customer row) never tells the whole story. Header-detail relational data has to be assembled before it's handed to a model, whether that's through a join like this or through flattening it into one document before embedding.
+→ I also swapped the SQL join for vector search: real embeddings over the same customer notes and call transcripts, feeding the LLM directly. Retrieval dropped from ~620ms to 47ms — but the accounts it surfaced had zero overlap with the SQL-ranked risk list. Fast retrieval isn't the same as the right context: a single note or call transcript never tells the whole story, the way a join across revenue, support, and pipeline data does.
 
 Everything here is measured, not modeled — no fabricated numbers, all results are append-only and reproducible. Fully open source: https://github.com/Anmol-Mahajan/ai-db-benchmark
 
