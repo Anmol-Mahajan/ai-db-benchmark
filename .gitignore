@@ -14,3 +14,4 @@ data/results/
 *.duckdb
 *.sqlite
 *.sqlite3
+docs/LINKEDIN_POST.md
